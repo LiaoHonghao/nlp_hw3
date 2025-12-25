@@ -1,0 +1,199 @@
+"""
+FIXED VERSION of train_transformer.py - Key Changes Only
+This shows the exact modifications needed to fix the bugs
+"""
+
+# ============================================================================
+# CHANGE 1: Fix imports (Line 33-34)
+# ============================================================================
+
+# BEFORE (Broken):
+# from data.vocabulary_bpe_en import BPEVocabularyEN
+# from data.vocabulary_bpe_zh import BPEVocabularyZH
+
+# AFTER (Fixed):
+from data.vocabulary_bpe import BPEVocabulary
+
+# ============================================================================
+# CHANGE 2: Add helper function to load raw text data (After line 200)
+# ============================================================================
+
+def load_raw_data(filepath):
+    """Load raw text data for BPE tokenization"""
+    data = []
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            item = json.loads(line)
+            data.append((item['zh'], item['en']))  # (zh_text, en_text)
+    return data
+
+# ============================================================================
+# CHANGE 3: Fix dataset_prepare function (Line 202-212)
+# ============================================================================
+
+# BEFORE (Broken):
+def dataset_prepare(data, vocab_zh, vocab_en, max_length=None, add_eos=False):
+    "assume source is Chinese, target is English"
+    zh_text, en_text = map(list, zip(*data))
+    zh_tokens = vocab_zh.segement_text(zh_text, max_length=max_length, is_pretokenized=False, output_ids=True)
+    en_tokens = vocab_en.segement_text(en_text, max_length=max_length, is_pretokenized=False, output_ids=True)
+    # if add_eos:
+    #     zh_tokens = [tokens + [vocab_zh.eos_token] for tokens in zh_tokens]
+    #     en_tokens = [[vocab_en.bos_token] + tokens + [vocab_en.eos_token] for tokens in en_tokens]
+    # else:
+    #     en_tokens = [[vocab_en.bos_token] + tokens for tokens in en_tokens]
+    return list(zip(zh_tokens, en_tokens))
+
+# AFTER (Fixed):
+def dataset_prepare(data, vocab_zh, vocab_en, max_length=None, add_eos=False):
+    """
+    Encode text data using BPE tokenizers
+
+    Args:
+        data: List of (zh_text, en_text) tuples (raw strings)
+        vocab_zh: Chinese BPE vocabulary
+        vocab_en: English BPE vocabulary
+        max_length: Maximum sequence length
+        add_eos: Whether to add EOS tokens
+
+    Returns:
+        List of (zh_ids, en_ids) tuples
+    """
+    # Unpack texts
+    zh_texts, en_texts = zip(*data)
+
+    # Encode using BPE tokenizers
+    zh_ids_list = vocab_zh.encode_batch(list(zh_texts), max_length=max_length)
+    en_ids_list = vocab_en.encode_batch(list(en_texts), max_length=max_length)
+
+    # Add special tokens if needed
+    if add_eos:
+        # For Chinese: add EOS at the end
+        zh_ids_list = [ids + [vocab_zh.eos_idx] for ids in zh_ids_list]
+
+        # For English: add BOS at start and EOS at end
+        en_ids_list = [[vocab_en.bos_idx] + ids + [vocab_en.eos_idx]
+                       for ids in en_ids_list]
+
+    return list(zip(zh_ids_list, en_ids_list))
+
+# ============================================================================
+# CHANGE 4: Fix data loading (Line 270-273)
+# ============================================================================
+
+# BEFORE (Broken):
+# train_data = preprocessor.load_and_preprocess(train_path, return_text=True)
+# valid_data = preprocessor.load_and_preprocess(config.VALID_PATH, return_text=True)
+# test_data = preprocessor.load_and_preprocess(config.TEST_PATH, return_text=True)
+
+# AFTER (Fixed):
+print("\nLoading raw text data...")
+train_data = load_raw_data(train_path)
+valid_data = load_raw_data(config.VALID_PATH)
+test_data = load_raw_data(config.TEST_PATH)
+
+# ============================================================================
+# CHANGE 5: Fix vocabulary initialization (Line 293-297)
+# ============================================================================
+
+# BEFORE (Broken):
+# vocab_zh = BPEVocabularyZH("Chinese")
+# vocab_en = BPEVocabularyEN("English")
+
+# AFTER (Fixed):
+vocab_zh = BPEVocabulary("Chinese_BPE")
+vocab_en = BPEVocabulary("English_BPE")
+
+# ============================================================================
+# ADDITIONAL FIX: Ensure BPEVocabulary has special ============================================================================
+
+# token properties
+# Add this to data/vocabulary_bpe.py (after decode_batch method):
+
+@property
+def pad_idx(self):
+    """Get padding token ID"""
+    if not self.is_trained:
+        return 0
+    return self.tokenizer.token_to_id(self.pad_token)
+
+@property
+def unk_idx(self):
+    """Get unknown token ID"""
+    if not self.is_trained:
+        return 1
+    return self.tokenizer.token_to_id(self.unk_token)
+
+@property
+def bos_idx(self):
+    """Get beginning-of-sentence token ID"""
+    if not self.is_trained:
+        return 2
+    return self.tokenizer.token_to_id(self.bos_token)
+
+@property
+def eos_idx(self):
+    """Get end-of-sentence token ID"""
+    if not self.is_trained:
+        return 3
+    return self.tokenizer.token_to_id(self.eos_token)
+
+# ============================================================================
+# COMPLETE WORKFLOW EXAMPLE
+# ============================================================================
+
+"""
+After applying these changes, the complete training workflow should be:
+
+1. Load raw text data (not pre-tokenized):
+   train_data = load_raw_data(train_path)
+
+2. Initialize BPE vocabularies:
+   vocab_zh = BPEVocabulary("Chinese_BPE")
+   vocab_en = BPEVocabulary("English_BPE")
+
+3. Train vocabularies:
+   vocab_zh.train_from_texts(zh_sentences, min_freq=2, max_size=50000)
+   vocab_en.train_from_texts(en_sentences, min_freq=2, max_size=50000)
+
+4. Encode data:
+   train_data_encoded = dataset_prepare(train_data, vocab_zh, vocab_en, max_length=50, add_eos=True)
+
+5. Create dataloaders:
+   train_loader = get_dataloader(train_data_encoded, vocab_zh, vocab_en, batch_size=64, shuffle=True)
+
+6. Train model:
+   model = Transformer(len(vocab_zh), len(vocab_en), ...)
+   # Training loop...
+"""
+
+# ============================================================================
+# VERIFICATION STEPS
+# ============================================================================
+
+"""
+To verify the fixes work:
+
+1. Test BPE vocabulary:
+   vocab = BPEVocabulary("Test")
+   vocab.train_from_texts(["hello world", "this is a test"], vocab_size=100)
+   ids = vocab.encode("hello world")
+   text = vocab.decode(ids)
+   assert text == "hello world"
+
+2. Test encoding batch:
+   texts = ["hello", "world"]
+   ids_list = vocab.encode_batch(texts, max_length=10)
+   assert len(ids_list) == 2
+
+3. Test special tokens:
+   assert vocab.pad_idx == vocab.tokenizer.token_to_id(vocab.pad_token)
+   assert vocab.bos_idx == vocab.tokenizer.token_to_id(vocab.bos_token)
+   assert vocab.eos_idx == vocab.tokenizer.token_to_id(vocab.eos_token)
+
+4. Test dataset_prepare:
+   data = [("你好", "hello"), ("世界", "world")]
+   result = dataset_prepare(data, vocab_zh, vocab_en, max_length=10)
+   assert len(result) == 2
+   assert len(result[0]) == 2  # (zh_ids, en_ids)
+"""
